@@ -6,7 +6,8 @@ report_dir: reports
 
 data: {sys_csv: system_state_5min.csv, job_csv: job_impact_dataset.csv,
        past_bins: 12, future_bins: 6, bin_seconds: 300, z_upper: 1.645}
-model: {dlin_epochs: 30, dlin_bs: 128, dlin_lr: 0.005, dlin_kernel: 7,
+model: {forecaster: nbeats, nbeats_blocks: 3, nbeats_hidden: 96,
+        dlin_epochs: 30, dlin_bs: 128, dlin_lr: 0.005, dlin_kernel: 7,
         xgb_params: {objective: reg:squarederror, max_depth: 6, learning_rate: 0.05, tree_method: hist},
         xgb_rounds: 400, xgb_early_stop: 20, xgb_n_splits: 3,
         congestion_use_lstm: false, congestion_beta: 2.0,

@@ -42,8 +42,13 @@ from hpc_io_scheduler.models.congestion import (
     select_best_idx,
 )
 from hpc_io_scheduler.models.dlinear import ProbabilisticDLinear, predict_dlinear
+from hpc_io_scheduler.models.nbeats import NBeatsProbabilistic, predict_nbeats
 from hpc_io_scheduler.models.lora_advisor import QwenAdvisor, heuristic_advise
 from hpc_io_scheduler.models.xgb_delta import predict_xgb, weighted_rmse
+
+
+def forecaster_is_dlinear(model) -> bool:
+    return isinstance(model, ProbabilisticDLinear)
 
 
 def _load_bundle(cfg: Config, root: Path) -> tuple:
@@ -52,12 +57,21 @@ def _load_bundle(cfg: Config, root: Path) -> tuple:
     sy = joblib.load(md / "scaler_y.joblib")
     pre = joblib.load(md / "preprocessor_job.joblib")
     thr = Thresholds.load(str(root / "guardrail_config.json"))
-    dlin = ProbabilisticDLinear(
-        cfg.data.past_bins, cfg.data.future_bins,
-        n_features=len(SYS_FEATURES_FOR_LOAD), n_targets=2, target_idx=(0, 4),
-    )
-    state = torch.load(md / "dlinear_t1.pt", map_location="cpu")
-    dlin.load_state_dict(state)
+    kind_path = md / "forecaster_kind.txt"
+    kind = kind_path.read_text().strip() if kind_path.exists() else "dlinear"
+    if kind == "nbeats":
+        from hpc_io_scheduler.models.nbeats import NBeatsProbabilistic
+        dlin = NBeatsProbabilistic(
+            cfg.data.past_bins, cfg.data.future_bins,
+            n_features=len(SYS_FEATURES_FOR_LOAD), n_targets=2, target_idx=(0, 4),
+        )
+        dlin.load_state_dict(torch.load(md / "nbeats_t1.pt", map_location="cpu"))
+    else:
+        dlin = ProbabilisticDLinear(
+            cfg.data.past_bins, cfg.data.future_bins,
+            n_features=len(SYS_FEATURES_FOR_LOAD), n_targets=2, target_idx=(0, 4),
+        )
+        dlin.load_state_dict(torch.load(md / "dlinear_t1.pt", map_location="cpu"))
     dlin.eval()
     xgb_bw = xgb.Booster(); xgb_bw.load_model(str(md / "xgb_bw.json"))
     xgb_rpc = xgb.Booster(); xgb_rpc.load_model(str(md / "xgb_rpc.json"))
@@ -118,7 +132,7 @@ def run_backtest(cfg: Config, artifact_dir: str = "artifacts",
     Xtr, Ytr, Xte, Yte, t_te = split_windows_by_horizon(
         X, Y, t_pred, cutoff, horizon_min=5 * cfg.data.future_bins,
     )
-    m, s = predict_dlinear(dlin, Xte)
+    m, s = predict_dlinear(dlin, Xte) if forecaster_is_dlinear(dlin) else predict_nbeats(dlin, Xte)
     shp = m.shape
     m_r = sy.inverse_transform(m.reshape(-1, 2)).reshape(shp)
     s_r = s * sy.scale_

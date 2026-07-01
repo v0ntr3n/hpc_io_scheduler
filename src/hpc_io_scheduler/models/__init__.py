@@ -13,6 +13,11 @@ from hpc_io_scheduler.models.lora_advisor import (
     QwenAdvisor,
     heuristic_advise,
 )
+from hpc_io_scheduler.models.nbeats import (
+    NBeatsProbabilistic,
+    predict_nbeats,
+    train_nbeats,
+)
 from hpc_io_scheduler.models.xgb_delta import (
     candidate_xgb_params,
     predict_xgb,
@@ -26,16 +31,19 @@ __all__ = [
     "ConformalForecaster",
     "DistilledAdvisor",
     "MultiHorizonDLinear",
+    "NBeatsProbabilistic",
     "ProbabilisticDLinear",
     "QwenAdvisor",
     "candidate_xgb_params",
     "fit_conformal",
     "heuristic_advise",
     "predict_dlinear",
+    "predict_nbeats",
     "predict_xgb",
     "timed_train",
     "train_dlinear",
     "train_multi_horizon",
+    "train_nbeats",
     "train_xgb",
     "weighted_rmse",
 ]

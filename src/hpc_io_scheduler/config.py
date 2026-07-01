@@ -28,6 +28,10 @@ class DataConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
+    forecaster: Literal["dlinear", "nbeats"] = "nbeats"
+    nbeats_blocks: int = 4
+    nbeats_hidden: int = 128
+
     # DLinear
     dlin_epochs: int = 30
     dlin_bs: int = 128
