@@ -1,17 +1,14 @@
-"""Fine-tuned Qwen LoRA advisor (Layer 3) for gray-zone decisions.
+"""LLM advisor (Layer 3) for gray-zone decisions.
 
-Currently configured for GGUF Gemma-3-4B via llama-cpp-python. No LoRA
-adapter applied; the model is used zero-shot with the sys_prompt.
+Calls an external llama.cpp server (OpenAI-compatible HTTP API) — no
+in-process model load. Memoizes by context hash to dedupe identical calls.
 """
 from __future__ import annotations
 
 import json
-import os
-import time
 from typing import Any
 
 import numpy as np
-import torch
 
 from hpc_io_scheduler.config import Config, LLMConfig
 
@@ -67,8 +64,6 @@ def _build_user_msg(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 class QwenAdvisor:
-    """Batched Qwen + LoRA inference. Memoizes by context hash."""
-
     def __init__(self, cfg: Config, llm_cfg: LLMConfig | None = None):
         self.cfg = cfg
         self.llm = llm_cfg or cfg.llm
@@ -77,49 +72,45 @@ class QwenAdvisor:
         self._memo: dict[tuple, tuple[str | None, list[str]]] = {}
         if not self.llm.use_llm:
             return
-        if self.llm.backend != "gguf":
-            print(f"[warn] backend={self.llm.backend} not supported in this build; use backend=gguf")
+        if self.llm.backend != "http":
+            print(f"[warn] backend={self.llm.backend} not supported; use backend=http")
             return
-        self._init_gguf()
+        self._check_server()
 
-    def _init_hf(self) -> None:
-        raise NotImplementedError("HF backend removed; use backend=gguf")
-
-    def _init_gguf(self) -> None:
-        """Load GGUF via llama-cpp-python. No LoRA (Gemma base)."""
+    def _check_server(self) -> None:
         try:
-            from llama_cpp import Llama
+            import httpx
 
-            if not os.path.isfile(self.llm.gguf_path):
-                print(f"[warn] GGUF not found: {self.llm.gguf_path}")
-                return
-            print(f"Loading GGUF: {self.llm.gguf_path}")
-            kw = dict(
-                model_path=self.llm.gguf_path,
-                n_ctx=self.llm.gguf_n_ctx,
-                n_gpu_layers=self.llm.gguf_n_gpu_layers,
-                verbose=False,
-            )
-            if self.llm.gguf_n_threads:
-                kw["n_threads"] = self.llm.gguf_n_threads
-            self.llm_model = Llama(**kw)
+            r = httpx.get(f"{self.llm.api_base}/health", timeout=5.0)
+            r.raise_for_status()
             self.ok = True
-            self.mode = f"gguf ({os.path.basename(self.llm.gguf_path)})"
-        except Exception as e:  # pragma: no cover
-            print(f"[warn] GGUF init failed: {e}")
+            self.mode = f"http ({self.llm.api_base})"
+        except Exception as e:
+            print(f"[warn] llama-server unreachable at {self.llm.api_base}: {e}")
 
-    def _gguf_chat(self, ctx: dict[str, Any]) -> str:
-        """Single-context chat completion via llama-cpp chat handler."""
+    def _http_chat(self, ctx: dict[str, Any]) -> str:
+        import httpx
+
         msgs = [
             {"role": "system", "content": self.llm.sys_prompt},
             {"role": "user", "content": json.dumps(_build_user_msg(ctx))},
         ]
-        out = self.llm_model.create_chat_completion(
-            messages=msgs,
-            max_tokens=self.llm.max_new_tokens,
-            temperature=0.0,
+        body = {
+            "model": self.llm.api_model,
+            "messages": msgs,
+            "max_tokens": self.llm.max_new_tokens,
+            "temperature": 0.0,
+            "stream": False,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.llm.api_key:
+            headers["Authorization"] = f"Bearer {self.llm.api_key}"
+        r = httpx.post(
+            f"{self.llm.api_base}/v1/chat/completions",
+            json=body, headers=headers, timeout=self.llm.api_timeout_sec,
         )
-        return out["choices"][0]["message"]["content"]
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
 
     @staticmethod
     def _ctx_key(ctx: dict[str, Any]) -> tuple:
@@ -132,14 +123,13 @@ class QwenAdvisor:
         )
 
     def advise(self, ctx: dict[str, Any]) -> tuple[str | None, list[str]]:
-        return self.advise_batch([ctx], batch_size=1)[0]
+        return self.advise_batch([ctx])[0]
 
     def advise_batch(
         self, contexts: list[dict[str, Any]], batch_size: int | None = None
     ) -> list[tuple[str | None, list[str]]]:
         if not self.ok or not contexts:
             return [(None, [])] * len(contexts)
-        bs = batch_size or self.llm.batch_size
         keys = [self._ctx_key(c) for c in contexts]
         uniq_idx: dict[tuple, int] = {}
         todo_ctx: list[dict] = []
@@ -150,87 +140,35 @@ class QwenAdvisor:
                 todo_ctx.append(c)
                 todo_keys.append(k)
         if todo_ctx:
-            fresh = self._infer_batch(todo_ctx, bs)
+            fresh = self._infer(todo_ctx)
             for k, r in zip(todo_keys, fresh):
                 self._memo[k] = r if r[0] is not None else (None, [])
         return [self._memo.get(k, (None, [])) for k in keys]
 
-    def _infer_batch(
-        self, contexts: list[dict], batch_size: int
-    ) -> list[tuple[str | None, list[str]]]:
+    def _infer(self, contexts: list[dict]) -> list[tuple[str | None, list[str]]]:
         results: list[tuple[str | None, list[str]]] = []
-        if self.llm.backend == "gguf":
-            for ctx in contexts:
+        for ctx in contexts:
+            try:
+                ans = self._http_chat(ctx)
+                action, codes = None, ["llama-server"]
                 try:
-                    ans = self._gguf_chat(ctx)
-                    action, codes = None, ["gguf"]
-                    try:
-                        obj = json.loads(ans[ans.index("{"): ans.rindex("}") + 1])
-                        action = _map_action(obj.get("action", ""))
-                        fb = obj.get("feedback_loop", {})
-                        if fb.get("retrain_trigger"):
-                            codes.append("RETRAIN")
-                        if fb.get("hitl_escalation"):
-                            codes.append("HITL")
-                    except Exception:
-                        action = _map_action(ans)
-                    results.append((action, codes))
-                except Exception as e:
-                    print(f"[warn] gguf inference: {e}")
-                    results.append((None, []))
-            return results
-
-        try:
-            texts = []
-            for ctx in contexts:
-                msgs = [
-                    {"role": "system", "content": self.llm.sys_prompt},
-                    {"role": "user", "content": json.dumps(_build_user_msg(ctx))},
-                ]
-                texts.append(self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True))
-            for s in range(0, len(texts), batch_size):
-                batch = texts[s : s + batch_size]
-                ids = self.tok(batch, return_tensors="pt", padding=True).to(self.model.device)
-                prompt_len = ids["input_ids"].shape[1]
-                with torch.no_grad():
-                    out = self.model.generate(
-                        **ids,
-                        max_new_tokens=self.llm.max_new_tokens,
-                        do_sample=False,
-                        pad_token_id=self.tok.eos_token_id,
-                        eos_token_id=self.tok.eos_token_id,
-                    )
-                for tokens in out:
-                    ans = self.tok.decode(tokens[prompt_len:], skip_special_tokens=True)
-                    action, codes = None, ["LLM_finetuned"]
-                    try:
-                        obj = json.loads(ans[ans.index("{") : ans.rindex("}") + 1])
-                        action = _map_action(obj.get("action", ""))
-                        fb = obj.get("feedback_loop", {})
-                        if fb.get("retrain_trigger"):
-                            codes.append("RETRAIN")
-                        if fb.get("hitl_escalation"):
-                            codes.append("HITL")
-                    except Exception:
-                        action = _map_action(ans)
-                    results.append((action, codes))
-            while len(results) < len(contexts):
+                    obj = json.loads(ans[ans.index("{"): ans.rindex("}") + 1])
+                    action = _map_action(obj.get("action", ""))
+                    fb = obj.get("feedback_loop", {})
+                    if fb.get("retrain_trigger"):
+                        codes.append("RETRAIN")
+                    if fb.get("hitl_escalation"):
+                        codes.append("HITL")
+                except Exception:
+                    action = _map_action(ans)
+                results.append((action, codes))
+            except Exception as e:
+                print(f"[warn] http inference: {e}")
                 results.append((None, []))
-            return results
-        except Exception as e:  # pragma: no cover
-            print(f"[warn] LLM batch failed: {e}")
-            return [(None, [])] * len(contexts)
-
-
-# ---- Distilled surrogate (Tier-2 I) ----------------------------------------
+        return results
 
 
 class DistilledAdvisor:
-    """Tree-based surrogate trained on logged LLM decisions.
-
-    Drop-in for QwenAdvisor in production. Same interface.
-    """
-
     def __init__(self, model_path: str):
         import joblib
 
@@ -246,7 +184,10 @@ class DistilledAdvisor:
                 float(ctx["rpc_bound"]),
                 float(ctx.get("priority", 100)),
                 int(ctx.get("task_type", "NA") == "training"),
-            ]
+                float(ctx.get("bw_frac", 0.0)),
+                float(ctx.get("rpc_frac", 0.0)),
+            ],
+            dtype=np.float32,
         )
 
     def advise(self, ctx: dict[str, Any]) -> tuple[str | None, list[str]]:

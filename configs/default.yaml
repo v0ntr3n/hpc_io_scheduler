@@ -59,10 +59,10 @@ mlops:
 
 llm:
   use_llm: true
-  backend: gguf
-  gguf_path: models/gemma-3-4b-it-IQ4_XS.gguf
-  gguf_n_ctx: 4096
-  gguf_n_gpu_layers: -1
+  backend: http
+  api_base: http://localhost:8080
+  api_model: gemma-3-4b-it
+  api_timeout_sec: 30
   batch_size: 32
   max_new_tokens: 64
 

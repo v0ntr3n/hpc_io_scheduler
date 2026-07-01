@@ -95,7 +95,11 @@ class MLOpsConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     use_llm: bool = True
-    backend: Literal["hf", "gguf"] = "gguf"
+    backend: Literal["http", "gguf"] = "http"
+    api_base: str = "http://localhost:8080"
+    api_key: str = ""
+    api_model: str = "gemma-3-4b-it"
+    api_timeout_sec: float = 30.0
     gguf_path: str = "models/gemma-3-4b-it-IQ4_XS.gguf"
     gguf_n_ctx: int = 4096
     gguf_n_gpu_layers: int = -1
