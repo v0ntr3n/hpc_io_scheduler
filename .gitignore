@@ -1,0 +1,81 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Type / lint caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project outputs
+data/raw/
+data/processed/
+data/*.csv
+artifacts/
+reports/
+logs/
+*.log
+
+# Model weights + serialised artifacts
+*.parquet
+*.pt
+*.safetensors
+*.joblib
+*.pkl
+*.npy
+*.npz
+*.bin
+*.gguf
+*.ggml
+*.onnx
+*.h5
+*.hdf5
+.git
+# Notebooks (sandbox)
+.ipynb_checkpoints/
+*.ipynb
+
+# Secrets / local
+.env
+.env.*
+!.env.example
+*.local.yaml
+config.local.yaml
+secrets.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# WandB / MLflow
+wandb/
+mlruns/
+mlartifacts/

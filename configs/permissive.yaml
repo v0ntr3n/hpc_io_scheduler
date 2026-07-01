@@ -1,0 +1,37 @@
+# Permissive mode: maximise throughput, accept more congestion.
+seed: 42
+data_dir: data
+artifact_dir: artifacts
+report_dir: reports
+
+data: {sys_csv: system_state_5min.csv, job_csv: job_impact_dataset.csv,
+       past_bins: 12, future_bins: 6, bin_seconds: 300, z_upper: 1.645}
+model: {dlin_epochs: 30, dlin_bs: 128, dlin_lr: 0.005, dlin_kernel: 7,
+        xgb_params: {objective: reg:squarederror, max_depth: 6, learning_rate: 0.05, tree_method: hist},
+        xgb_rounds: 400, xgb_early_stop: 20, xgb_n_splits: 3,
+        congestion_use_lstm: false, congestion_beta: 2.0,
+        congestion_min_recall: 0.70, congestion_max_recall: 0.95,
+        congestion_min_lift: 1.10}
+guardrail:
+  bw_quantile_soft: 0.97
+  bw_quantile_hard: 0.995
+  rpc_quantile_soft: 0.97
+  rpc_quantile_hard: 0.995
+  sustained_bins: 4
+  z: 1.45
+  hard_buffer: 1.2
+  rescue_thr_max: 0.25
+  kf_sigma_w2_bw: 0.0001
+  kf_sigma_v2_bw: 0.01
+  kf_p0_bw: 1.0
+  kf_sigma_w2_rpc: 1.0e12
+  kf_sigma_v2_rpc: 1.0e14
+  kf_p0_rpc: 1.0e14
+  auto_tune: true
+mlops: {k_nis: 6.63, conf_min: 0.5, recent_window: 20}
+llm: {use_llm: true, backend: gguf,
+      gguf_path: models/gemma-3-4b-it-IQ4_XS.gguf,
+      gguf_n_ctx: 4096, gguf_n_gpu_layers: -1,
+      batch_size: 32, max_new_tokens: 64}
+sim: {capacity_quantile: 0.95, capacity_min: 50, duration_logn_mean_sec: 7200,
+      duration_logn_sigma: 1.0, duration_min_sec: 60, duration_max_sec: 604800, seed: 42}
